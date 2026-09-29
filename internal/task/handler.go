@@ -65,17 +65,38 @@ func (h *Handler) CreateTask(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Method is not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	tasks := h.repository.GetAll()
 
 	var task Task
 	err := json.NewDecoder(r.Body).Decode(&task)
 	if err != nil {
-		http.Error(w, "Invalid request body", http.StatusBadRequest)
+		http.Error(w, "Invalid request body: "+err.Error(), http.StatusBadRequest)
 		return
 	}
 
-	task.ID = len(tasks) + 1
-	tasks = append(tasks, task)
+	task.ID = len(h.repository.tasks) + 1
+
+	now := time.Now().In(location)
+	task.Created_at = time.Date(
+		now.Year(),
+		now.Month(),
+		now.Day(),
+		now.Hour(),
+		now.Minute(),
+		now.Second(),
+		now.Nanosecond(),
+		location,
+	)
+	task.Updated_at = time.Date(
+		now.Year(),
+		now.Month(),
+		now.Day(),
+		now.Hour(),
+		now.Minute(),
+		now.Second(),
+		now.Nanosecond(),
+		location,
+	)
+	h.repository.tasks = append(h.repository.tasks, task)
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
@@ -96,7 +117,7 @@ func (h *Handler) UpdateTask(w http.ResponseWriter, r *http.Request) {
 	var updatedtask Task
 	err := json.NewDecoder(r.Body).Decode(&updatedtask)
 	if err != nil {
-		http.Error(w, "Invalid request body", http.StatusBadRequest)
+		http.Error(w, "Invalid request body: "+err.Error(), http.StatusBadRequest)
 		return
 	}
 
@@ -106,6 +127,7 @@ func (h *Handler) UpdateTask(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Invalid task ID", http.StatusBadRequest)
 		return
 	}
+	now := time.Now().In(location)
 	for i, task := range tasks {
 		if task.ID == id {
 			tasks[i].Title = updatedtask.Title
@@ -113,7 +135,16 @@ func (h *Handler) UpdateTask(w http.ResponseWriter, r *http.Request) {
 			tasks[i].Status = updatedtask.Status
 			tasks[i].Priority = updatedtask.Priority
 			tasks[i].Due_date = updatedtask.Due_date
-			tasks[i].Updated_at = time.Now().In(location).Truncate(time.Second)
+			tasks[i].Updated_at = time.Date(
+				now.Year(),
+				now.Month(),
+				now.Day(),
+				now.Hour(),
+				now.Minute(),
+				now.Second(),
+				now.Nanosecond(),
+				location,
+			)
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusOK)
 			err := json.NewEncoder(w).Encode(tasks[i])
@@ -132,7 +163,7 @@ func (h *Handler) DeleteTask(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Method is not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	tasks := h.repository.GetAll()
+	h.repository.GetAll()
 
 	idStr := r.URL.Query().Get("id")
 	id, err := strconv.Atoi(idStr)
@@ -141,9 +172,9 @@ func (h *Handler) DeleteTask(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	for i, task := range tasks {
+	for i, task := range h.repository.tasks {
 		if task.ID == id {
-			tasks = append(tasks[:i], tasks[i+1:]...)
+			h.repository.tasks = append(h.repository.tasks[:i], h.repository.tasks[i+1:]...)
 			w.WriteHeader(http.StatusNoContent)
 			return
 		}
