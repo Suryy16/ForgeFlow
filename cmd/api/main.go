@@ -5,11 +5,22 @@ import (
 	"log"
 	"net/http"
 
+	"github.com/Suryy16/ForgeFlow/internal/config"
+	"github.com/Suryy16/ForgeFlow/internal/database"
 	"github.com/Suryy16/ForgeFlow/internal/task"
 	"github.com/Suryy16/ForgeFlow/internal/user"
 )
 
 func main() {
+	dsn, err := config.DatabaseURL()
+	if err != nil {
+		log.Fatal(err)
+	}
+	db, err := database.Connect(dsn)
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer db.Close()
 
 	router := http.NewServeMux()
 	taskRepository := task.NewRepository
