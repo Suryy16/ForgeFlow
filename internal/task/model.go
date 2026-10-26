@@ -1,16 +1,47 @@
 package task
 
-import "time"
+import (
+	"time"
+
+	"github.com/google/uuid"
+)
 
 type Task struct {
-	ID          int       `json:"id"`
-	Owner_ID    int       `json:"owner_id"`
-	Assignee_ID int       `json:"assignee_id"`
-	Title       string    `json:"title"`
-	Description string    `json:"description"`
-	Status      string    `json:"status"`
-	Priority    string    `json:"priority"`
-	Due_date    time.Time `json:"due_date"`
-	Created_at  time.Time `json:"created_at"`
-	Updated_at  time.Time `json:"updated_at"`
+	ID          uuid.UUID
+	ProjectID   uuid.UUID
+	AssigneeID  *uuid.UUID
+	Title       string
+	Description *string
+	Status      string
+	Priority    string
+	DueDate     *time.Time
+	CreatedAt   time.Time
+	UpdatedAt   time.Time
+}
+
+func toTaskResponse(t Task) TaskResponse {
+	var assigneeID *string
+	if t.AssigneeID != nil {
+		value := t.AssigneeID.String()
+		assigneeID = &value
+	}
+
+	var dueDate *string
+	if t.DueDate != nil {
+		value := t.DueDate.Format("2006-01-02")
+		dueDate = &value
+	}
+
+	return TaskResponse{
+		ID:          t.ID.String(),
+		ProjectID:   t.ProjectID.String(),
+		AssigneeID:  assigneeID,
+		Title:       t.Title,
+		Description: t.Description,
+		Status:      t.Status,
+		Priority:    t.Priority,
+		DueDate:     dueDate,
+		CreatedAt:   t.CreatedAt.UTC().Format(time.RFC3339Nano),
+		UpdatedAt:   t.UpdatedAt.UTC().Format(time.RFC3339Nano),
+	}
 }

@@ -23,9 +23,9 @@ func main() {
 	defer db.Close()
 
 	router := http.NewServeMux()
-	taskRepository := task.NewRepository
+	taskRepository := task.NewPostgresRepository(db)
 	userRepository := user.NewRepository
-	taskHandler := task.NewHandler(taskRepository())
+	taskHandler := task.NewHandler(taskRepository)
 	userHandler := user.NewHandler(userRepository())
 
 	fmt.Println("Starting server on :8080...")
@@ -34,16 +34,16 @@ func main() {
 		"GET /api/v1/tasks", taskHandler.GetTasks,
 	)
 	router.HandleFunc(
-		"GET /api/v1/task", taskHandler.GetTask,
+		"GET /api/v1/tasks/{id}", taskHandler.GetTask,
 	)
 	router.HandleFunc(
-		"POST /api/v1/task/create", taskHandler.CreateTask,
+		"POST /api/v1/projects/{project_id}/tasks", taskHandler.CreateTask,
 	)
 	router.HandleFunc(
-		"PATCH /api/v1/task/update", taskHandler.UpdateTask,
+		"PUT /api/v1/tasks/{id}", taskHandler.UpdateTask,
 	)
 	router.HandleFunc(
-		"DELETE /api/v1/task/delete", taskHandler.DeleteTask,
+		"DELETE /api/v1/tasks/{id}", taskHandler.DeleteTask,
 	)
 
 	//Users

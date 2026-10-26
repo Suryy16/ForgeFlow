@@ -1,80 +1,287 @@
 package task
 
-import "time"
+import (
+	"context"
+	"errors"
+	"fmt"
 
-type Repository struct {
-	tasks []Task
+	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
+	"github.com/jackc/pgx/v5/pgxpool"
+)
+
+var (
+	ErrTaskNotFound      = errors.New("task not found")
+	ErrProjectNotFound   = errors.New("project not found")
+	ErrAssigneeNotMember = errors.New("assignee is not a project member")
+)
+
+type TaskRepository interface {
+	Create(ctx context.Context, task Task) (Task, error)
+	GetByID(ctx context.Context, id uuid.UUID) (Task, error)
+	GetAll(ctx context.Context) ([]Task, error)
+	Update(ctx context.Context, task Task) (Task, error)
+	Delete(ctx context.Context, id uuid.UUID) error
 }
 
-var location = time.FixedZone("UTC+8", 8*60*60)
+type PostgresRepository struct {
+	db *pgxpool.Pool
+}
 
-func NewRepository() *Repository {
-	return &Repository{
-		tasks: []Task{
-			{
-				ID:          1,
-				Owner_ID:    101,
-				Assignee_ID: 201,
-				Title:       "Implementasi Login API",
-				Description: "Membuat endpoint login dengan JWT authentication",
-				Status:      "IN_PROGRES",
-				Priority:    "HIGH",
-				Due_date:    time.Date(2024, 7, 15, 17, 0, 0, 0, location),
-				Created_at:  time.Date(2024, 7, 1, 9, 30, 0, 0, location),
-				Updated_at:  time.Date(2024, 7, 5, 14, 20, 0, 0, location),
-			},
-			{
-				ID:          2,
-				Owner_ID:    101,
-				Assignee_ID: 202,
-				Title:       "Desain Halaman Dashboard",
-				Description: "Membuat mockup dan UI dashboard admin menggunakan Figma",
-				Status:      "TODO",
-				Priority:    "MEDIUM",
-				Due_date:    time.Date(2024, 7, 20, 17, 0, 0, 0, location),
-				Created_at:  time.Date(2024, 7, 2, 10, 0, 0, 0, location),
-				Updated_at:  time.Date(2024, 7, 2, 10, 0, 0, 0, location),
-			},
-			{
-				ID:          3,
-				Owner_ID:    102,
-				Assignee_ID: 203,
-				Title:       "Fix Bug pada Fitur Upload",
-				Description: "File upload gagal ketika ukuran lebih dari 5MB",
-				Status:      "DONE",
-				Priority:    "HIGH",
-				Due_date:    time.Date(2024, 7, 10, 12, 0, 0, 0, location),
-				Created_at:  time.Date(2024, 6, 28, 8, 15, 0, 0, location),
-				Updated_at:  time.Date(2024, 7, 9, 16, 45, 0, 0, location),
-			},
-			{
-				ID:          4,
-				Owner_ID:    102,
-				Assignee_ID: 201,
-				Title:       "Menulis Dokumentasi API",
-				Description: "Membuat dokumentasi endpoint menggunakan Swagger",
-				Status:      "TODO",
-				Priority:    "LOW",
-				Due_date:    time.Date(2024, 7, 30, 17, 0, 0, 0, location),
-				Created_at:  time.Date(2024, 7, 3, 13, 0, 0, 0, location),
-				Updated_at:  time.Date(2024, 7, 3, 13, 0, 0, 0, location),
-			},
-			{
-				ID:          5,
-				Owner_ID:    103,
-				Assignee_ID: 204,
-				Title:       "Setup CI/CD Pipeline",
-				Description: "Konfigurasi GitHub Actions untuk deployment otomatis ke server staging",
-				Status:      "IN_PROGRES",
-				Priority:    "MEDIUM",
-				Due_date:    time.Date(2024, 7, 25, 17, 0, 0, 0, location),
-				Created_at:  time.Date(2024, 7, 4, 11, 30, 0, 0, location),
-				Updated_at:  time.Date(2024, 7, 6, 9, 15, 0, 0, location),
-			},
-		},
+func NewPostgresRepository(db *pgxpool.Pool) *PostgresRepository {
+	return &PostgresRepository{db: db}
+}
+
+func (r *PostgresRepository) GetByID(
+	ctx context.Context,
+	id uuid.UUID,
+) (Task, error) {
+	var t Task
+
+	query := `
+		SELECT
+			id,
+			project_id,
+			assignee_id,
+			title,
+			description,
+			status,
+			priority,
+			due_date,
+			created_at,
+			updated_at
+		FROM tasks
+		WHERE id = $1
+	`
+
+	err := r.db.QueryRow(ctx, query, id).Scan(
+		&t.ID,
+		&t.ProjectID,
+		&t.AssigneeID,
+		&t.Title,
+		&t.Description,
+		&t.Status,
+		&t.Priority,
+		&t.DueDate,
+		&t.CreatedAt,
+		&t.UpdatedAt,
+	)
+
+	if errors.Is(err, pgx.ErrNoRows) {
+		return Task{}, ErrTaskNotFound
 	}
+	if err != nil {
+		return Task{}, err
+	}
+
+	return t, nil
 }
 
-func (r *Repository) GetAll() []Task {
-	return r.tasks
+func (r *PostgresRepository) GetAll(
+	ctx context.Context,
+) ([]Task, error) {
+	query := `
+		SELECT
+			id,
+			project_id,
+			assignee_id,
+			title,
+			description,
+			status,
+			priority,
+			due_date,
+			created_at,
+			updated_at
+		FROM tasks
+	`
+
+	rows, err := r.db.Query(ctx, query)
+	if err != nil {
+		return nil, fmt.Errorf("query tasks: %w", err)
+	}
+	defer rows.Close()
+
+	tasks := make([]Task, 0)
+
+	for rows.Next() {
+		var t Task
+
+		if err := rows.Scan(
+			&t.ID,
+			&t.ProjectID,
+			&t.AssigneeID,
+			&t.Title,
+			&t.Description,
+			&t.Status,
+			&t.Priority,
+			&t.DueDate,
+			&t.CreatedAt,
+			&t.UpdatedAt,
+		); err != nil {
+			return nil, fmt.Errorf("scan task: %w", err)
+		}
+
+		tasks = append(tasks, t)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate tasks: %w", err)
+	}
+
+	return tasks, nil
+}
+
+func (r *PostgresRepository) Create(
+	ctx context.Context,
+	task Task,
+) (Task, error) {
+	const query = `
+		INSERT INTO tasks (
+			project_id,
+			assignee_id,
+			title,
+			description,
+			status,
+			priority
+		)
+		VALUES ($1, $2, $3, $4, 'TODO', $5)
+		RETURNING
+			id,
+			project_id,
+			assignee_id,
+			title,
+			description,
+			status,
+			priority,
+			due_date,
+			created_at,
+			updated_at
+	`
+
+	var created Task
+
+	err := r.db.QueryRow(
+		ctx,
+		query,
+		task.ProjectID,
+		task.AssigneeID,
+		task.Title,
+		task.Description,
+		task.Priority,
+	).Scan(
+		&created.ID,
+		&created.ProjectID,
+		&created.AssigneeID,
+		&created.Title,
+		&created.Description,
+		&created.Status,
+		&created.Priority,
+		&created.DueDate,
+		&created.CreatedAt,
+		&created.UpdatedAt,
+	)
+	if err != nil {
+		var pgErr *pgconn.PgError
+		if errors.As(err, &pgErr) && pgErr.Code == "23503" {
+			switch pgErr.ConstraintName {
+			case "tasks_project_id_fkey":
+				return Task{}, ErrProjectNotFound
+			case "fk_tasks_assignee_membership":
+				return Task{}, ErrAssigneeNotMember
+			}
+		}
+
+		if errors.Is(err, pgx.ErrNoRows) {
+			return Task{}, fmt.Errorf("create task returned no row: %w", err)
+		}
+
+		return Task{}, fmt.Errorf("insert task: %w", err)
+	}
+
+	return created, nil
+}
+
+func (r *PostgresRepository) Update(
+	ctx context.Context,
+	task Task,
+) (Task, error) {
+	query := `
+		UPDATE tasks
+		SET
+			project_id = $2,
+			assignee_id = $3,
+			title = $4,
+			description = $5,
+			status = $6,
+			priority = $7,
+			due_date = $8,
+			updated_at = NOW()
+		WHERE id = $1
+		RETURNING
+			id,
+			project_id,
+			assignee_id,
+			title,
+			description,
+			status,
+			priority,
+			due_date,
+			created_at,
+			updated_at
+	`
+
+	var updated Task
+
+	err := r.db.QueryRow(
+		ctx,
+		query,
+		task.ID,
+		task.ProjectID,
+		task.AssigneeID,
+		task.Title,
+		task.Description,
+		task.Status,
+		task.Priority,
+		task.DueDate,
+	).Scan(
+		&updated.ID,
+		&updated.ProjectID,
+		&updated.AssigneeID,
+		&updated.Title,
+		&updated.Description,
+		&updated.Status,
+		&updated.Priority,
+		&updated.DueDate,
+		&updated.CreatedAt,
+		&updated.UpdatedAt,
+	)
+
+	if errors.Is(err, pgx.ErrNoRows) {
+		return Task{}, ErrTaskNotFound
+	}
+	if err != nil {
+		return Task{}, fmt.Errorf("update task: %w", err)
+	}
+
+	return updated, nil
+}
+
+func (r *PostgresRepository) Delete(
+	ctx context.Context,
+	id uuid.UUID,
+) error {
+	query := `
+		DELETE FROM tasks
+		WHERE id = $1
+	`
+	tag, err := r.db.Exec(ctx, query, id)
+	if err != nil {
+		return fmt.Errorf("delete task: %w", err)
+	}
+
+	if tag.RowsAffected() == 0 {
+		return ErrTaskNotFound
+	}
+	return nil
 }
