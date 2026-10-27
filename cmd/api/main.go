@@ -7,6 +7,7 @@ import (
 
 	"github.com/Suryy16/ForgeFlow/internal/config"
 	"github.com/Suryy16/ForgeFlow/internal/database"
+	"github.com/Suryy16/ForgeFlow/internal/project"
 	"github.com/Suryy16/ForgeFlow/internal/task"
 	"github.com/Suryy16/ForgeFlow/internal/user"
 )
@@ -24,8 +25,10 @@ func main() {
 
 	router := http.NewServeMux()
 	taskRepository := task.NewPostgresRepository(db)
+	projectRepository := project.NewPostgresRepository(db)
 	userRepository := user.NewRepository
 	taskHandler := task.NewHandler(taskRepository)
+	projectHandler := project.NewHandler(projectRepository)
 	userHandler := user.NewHandler(userRepository())
 
 	fmt.Println("Starting server on :8080...")
@@ -44,6 +47,23 @@ func main() {
 	)
 	router.HandleFunc(
 		"DELETE /api/v1/tasks/{id}", taskHandler.DeleteTask,
+	)
+
+	//Projects
+	router.HandleFunc(
+		"GET /api/v1/projects/{id}", projectHandler.GetProject,
+	)
+	router.HandleFunc(
+		"GET /api/v1/projects", projectHandler.GetProjects,
+	)
+	router.HandleFunc(
+		"POST /api/v1/projects", projectHandler.CreateProject,
+	)
+	router.HandleFunc(
+		"PUT /api/v1/projects/{id}", projectHandler.UpdateProject,
+	)
+	router.HandleFunc(
+		"DELETE /api/v1/projects/{id}", projectHandler.DeleteProject,
 	)
 
 	//Users
