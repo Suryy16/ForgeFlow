@@ -14,6 +14,8 @@ import (
 var (
 	ErrProjectNotFound = errors.New("project not found")
 	ErrOwnerNotMember  = errors.New("owner is not a project member")
+	ErrUserNotFound    = errors.New("user not found")
+	ErrMemberExists    = errors.New("user is already a project member")
 )
 
 type ProjectRepository interface {
@@ -22,6 +24,7 @@ type ProjectRepository interface {
 	Create(ctx context.Context, project Project) (Project, error)
 	Update(ctx context.Context, project Project) (Project, error)
 	Delete(ctx context.Context, id uuid.UUID) error
+	AddMember(ctx context.Context, member ProjectMember) (ProjectMember, error)
 }
 
 type PostgresRepository struct {
@@ -234,4 +237,69 @@ func (r *PostgresRepository) Delete(
 		return ErrProjectNotFound
 	}
 	return nil
+}
+
+func (r *PostgresRepository) AddMember(
+	ctx context.Context,
+	member ProjectMember,
+) (ProjectMember, error) {
+	const query = `
+		INSERT INTO project_members (
+			project_id,
+			user_id,
+			role
+		)
+		VALUES ($1, $2, $3)
+		RETURNING
+			project_id,
+			user_id,
+			role,
+			created_at,
+			updated_at
+	`
+
+	var created ProjectMember
+
+	err := r.db.QueryRow(
+		ctx,
+		query,
+		member.ProjectID,
+		member.UserID,
+		member.Role,
+	).Scan(
+		&created.ProjectID,
+		&created.UserID,
+		&created.Role,
+		&created.CreatedAt,
+		&created.UpdatedAt,
+	)
+	if err != nil {
+		var pgErr *pgconn.PgError
+		if errors.As(err, &pgErr) {
+			switch {
+			case pgErr.Code == "23505" &&
+				pgErr.ConstraintName == "project_members_pkey":
+				return ProjectMember{}, ErrMemberExists
+
+			case pgErr.Code == "23503":
+				switch pgErr.ConstraintName {
+				case "project_members_project_id_fkey":
+					return ProjectMember{}, ErrProjectNotFound
+				case "project_members_user_id_fkey":
+					return ProjectMember{}, ErrUserNotFound
+				}
+			}
+		}
+
+		if errors.Is(err, pgx.ErrNoRows) {
+			return ProjectMember{}, fmt.Errorf(
+				"insert project member returned no row: %w",
+				err,
+			)
+		}
+
+		return ProjectMember{}, fmt.Errorf("insert project member: %w", err)
+	}
+
+	return created, nil
 }

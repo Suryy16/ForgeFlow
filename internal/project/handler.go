@@ -8,6 +8,7 @@ import (
 	"log"
 	"net/http"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/google/uuid"
 )
@@ -20,9 +21,37 @@ func NewHandler(repo ProjectRepository) *Handler {
 	return &Handler{repo: repo}
 }
 
+func writeJSON(w http.ResponseWriter, status int, data any) {
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	w.WriteHeader(status)
+
+	if err := json.NewEncoder(w).Encode(data); err != nil {
+		log.Printf("failed to encode JSON response: %v", err)
+	}
+}
+
+func writeError(w http.ResponseWriter, status int, message string) {
+	writeJSON(w, status, map[string]string{
+		"error": message,
+	})
+}
+
+func requireMethod(
+	w http.ResponseWriter,
+	r *http.Request,
+	method string,
+) bool {
+	if r.Method == method {
+		return true
+	}
+
+	w.Header().Set("Allow", method)
+	writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+	return false
+}
+
 func (h *Handler) GetProject(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+	if !requireMethod(w, r, http.MethodGet) {
 		return
 	}
 
@@ -54,8 +83,7 @@ func (h *Handler) GetProject(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) GetProjects(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+	if !requireMethod(w, r, http.MethodGet) {
 		return
 	}
 
@@ -75,46 +103,48 @@ func (h *Handler) GetProjects(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func (h *Handler) CreateProject(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+func (h *Handler) CreateProject(
+	w http.ResponseWriter,
+	r *http.Request,
+) {
+	if !requireMethod(w, r, http.MethodPost) {
 		return
 	}
 
 	var req CreateProjectRequest
 
-	decoder := json.NewDecoder(
-		http.MaxBytesReader(w, r.Body, 1<<20),
-	)
+	r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
+	decoder := json.NewDecoder(r.Body)
 	decoder.DisallowUnknownFields()
 
 	if err := decoder.Decode(&req); err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{
-			"error": "invalid request body",
-		})
+		writeError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
 
 	var extra any
 	if err := decoder.Decode(&extra); !errors.Is(err, io.EOF) {
-		writeJSON(w, http.StatusBadRequest, map[string]string{
-			"error": "request body must contain exactly one JSON object",
-		})
+		writeError(
+			w,
+			http.StatusBadRequest,
+			"request body must contain exactly one JSON object",
+		)
 		return
 	}
 
 	req.Name = strings.TrimSpace(req.Name)
+
 	if req.Name == "" {
-		writeJSON(w, http.StatusBadRequest, map[string]string{
-			"error": "Name is required",
-		})
+		writeError(w, http.StatusBadRequest, "name is required")
 		return
 	}
 
-	if len(req.Name) > 255 {
-		writeJSON(w, http.StatusBadRequest, map[string]string{
-			"error": "Name must not exceed 255 characters",
-		})
+	if utf8.RuneCountInString(req.Name) > 150 {
+		writeError(
+			w,
+			http.StatusBadRequest,
+			"name must not exceed 150 characters",
+		)
 		return
 	}
 
@@ -123,81 +153,60 @@ func (h *Handler) CreateProject(w http.ResponseWriter, r *http.Request) {
 		req.Description = &description
 	}
 
-	var ownerID *uuid.UUID
+	if req.OwnerID == nil || strings.TrimSpace(*req.OwnerID) == "" {
+		writeError(w, http.StatusBadRequest, "owner_id is required")
+		return
+	}
 
-	if req.OwnerID != nil {
-		value := strings.TrimSpace(*req.OwnerID)
-		if value == "" {
-			writeJSON(w, http.StatusBadRequest, map[string]string{
-				"error": "owner_id must be a valid UUID or null",
-			})
-			return
-		}
-
-		parsedID, err := uuid.Parse(value)
-		if err != nil {
-			writeJSON(w, http.StatusBadRequest, map[string]string{
-				"error": "assignee_id must be a valid UUID",
-			})
-			return
-		}
-
-		ownerID = &parsedID
+	ownerID, err := uuid.Parse(strings.TrimSpace(*req.OwnerID))
+	if err != nil {
+		writeError(
+			w,
+			http.StatusBadRequest,
+			"owner_id must be a valid UUID",
+		)
+		return
 	}
 
 	project := Project{
 		Name:        req.Name,
 		Description: req.Description,
-		OwnerID:     ownerID,
+		OwnerID:     &ownerID,
 	}
 
 	created, err := h.repo.Create(r.Context(), project)
-
 	if err != nil {
-		switch {
-		case errors.Is(err, ErrOwnerNotMember):
-			writeJSON(w, http.StatusNotFound, map[string]string{
-				"error": "Owner is not member",
-			})
-		default:
-			fmt.Printf("CreateProject failed: %v\n", err)
-			writeJSON(w, http.StatusInternalServerError, map[string]string{
-				"error": "failed to create project",
-			})
+		if errors.Is(err, ErrOwnerNotMember) {
+			writeError(
+				w,
+				http.StatusConflict,
+				"project owner must be a project member",
+			)
+			return
 		}
+
+		log.Printf("CreateProject failed: %v", err)
+		writeError(
+			w,
+			http.StatusInternalServerError,
+			"failed to create project",
+		)
 		return
 	}
 
-	location := fmt.Sprintf(
-		"/api/v1/projects/%s",
-		created.ID.String(),
+	w.Header().Set(
+		"Location",
+		fmt.Sprintf("/api/v1/projects/%s", created.ID),
 	)
-	w.Header().Set("Location", location)
 
 	writeJSON(w, http.StatusCreated, toProjectResponse(created))
-}
-
-func writeJSON(w http.ResponseWriter, status int, data any) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(status)
-
-	if err := json.NewEncoder(w).Encode(data); err != nil {
-		// Status sudah dikirim, jadi jangan mencoba mengirim response
-		// HTTP kedua. Kegagalan ini sebaiknya dicatat di logger.
-		fmt.Printf("write JSON response failed: %v\n", err)
-	}
 }
 
 func (h *Handler) UpdateProject(
 	w http.ResponseWriter,
 	r *http.Request,
 ) {
-	if r.Method != http.MethodPut {
-		http.Error(
-			w,
-			"Method not allowed",
-			http.StatusMethodNotAllowed,
-		)
+	if !requireMethod(w, r, http.MethodPut) {
 		return
 	}
 
@@ -261,12 +270,7 @@ func (h *Handler) DeleteProject(
 	w http.ResponseWriter,
 	r *http.Request,
 ) {
-	if r.Method != http.MethodDelete {
-		http.Error(
-			w,
-			"Method not allowed",
-			http.StatusMethodNotAllowed,
-		)
+	if !requireMethod(w, r, http.MethodDelete) {
 		return
 	}
 
@@ -302,4 +306,91 @@ func (h *Handler) DeleteProject(
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+func (h *Handler) AddMember(w http.ResponseWriter, r *http.Request) {
+	if !requireMethod(w, r, http.MethodPost) {
+		return
+	}
+
+	projectID, err := uuid.Parse(r.PathValue("project_id"))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid project_id")
+		return
+	}
+
+	var req AddProjectMemberRequest
+
+	r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
+	decoder := json.NewDecoder(r.Body)
+	decoder.DisallowUnknownFields()
+
+	if err := decoder.Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+
+	var extra any
+	if err := decoder.Decode(&extra); !errors.Is(err, io.EOF) {
+		writeError(
+			w,
+			http.StatusBadRequest,
+			"request body must contain exactly one JSON object",
+		)
+		return
+	}
+
+	userID, err := uuid.Parse(strings.TrimSpace(req.UserID))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "user_id must be a valid UUID")
+		return
+	}
+
+	role := strings.ToUpper(strings.TrimSpace(req.Role))
+	if role == "" {
+		role = "MEMBER"
+	}
+
+	if role != "ADMIN" && role != "MEMBER" {
+		writeError(w, http.StatusBadRequest, "role must be ADMIN or MEMBER")
+		return
+	}
+
+	member := ProjectMember{
+		ProjectID: projectID,
+		UserID:    userID,
+		Role:      role,
+	}
+
+	created, err := h.repo.AddMember(r.Context(), member)
+	if err != nil {
+		switch {
+		case errors.Is(err, ErrProjectNotFound):
+			writeError(w, http.StatusNotFound, "project not found")
+		case errors.Is(err, ErrUserNotFound):
+			writeError(w, http.StatusNotFound, "user not found")
+		case errors.Is(err, ErrMemberExists):
+			writeError(
+				w,
+				http.StatusConflict,
+				"user is already a member of this project",
+			)
+		default:
+			log.Printf("AddMember failed: %v", err)
+			writeError(
+				w,
+				http.StatusInternalServerError,
+				"failed to add project member",
+			)
+		}
+		return
+	}
+
+	writeJSON(w, http.StatusCreated, map[string]any{
+		"project_id": created.ProjectID,
+		"user_id":    created.UserID,
+		"role":       created.Role,
+		"created_at": created.CreatedAt,
+		"updated_at": created.UpdatedAt,
+	})
 }
