@@ -1,0 +1,16 @@
+
+services:
+  postgres-test:
+    image: postgres:17
+    container_name: forgeflow-postgres-test
+    environment:
+      POSTGRES_USER: forgeflow_test
+      POSTGRES_PASSWORD: forgeflow_test
+      POSTGRES_DB: forgeflow_test
+    ports:
+      - "5433:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U forgeflow_test -d forgeflow_test"]
+      interval: 5s
+      timeout: 5s
+      retries: 5

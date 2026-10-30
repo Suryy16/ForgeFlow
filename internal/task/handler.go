@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/Suryy16/ForgeFlow/internal/auth"
 	"github.com/google/uuid"
 )
 
@@ -21,25 +22,24 @@ func NewHandler(repo TaskRepository) *Handler {
 }
 
 func (h *Handler) GetTasks(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+	userID, ok := auth.UserIDFromContext(r.Context())
+	if !ok {
+		writeJSON(w, http.StatusUnauthorized, map[string]string{
+			"error": "unauthorized",
+		})
 		return
 	}
 
-	tasks, err := h.repo.GetAll(r.Context())
+	tasks, err := h.repo.GetAllByUser(r.Context(), userID)
 	if err != nil {
-		http.Error(
-			w,
-			"Internal server error",
-			http.StatusInternalServerError,
-		)
+		log.Printf("GetTasks failed: %v", err)
+		writeJSON(w, http.StatusInternalServerError, map[string]string{
+			"error": "failed to retrieve tasks",
+		})
 		return
 	}
 
-	w.Header().Set("Content-Type", "application/json")
-	if err := json.NewEncoder(w).Encode(tasks); err != nil {
-		log.Printf("failed to encode tasks response: %v", err)
-	}
+	writeJSON(w, http.StatusOK, tasks)
 }
 
 func (h *Handler) GetTask(w http.ResponseWriter, r *http.Request) {

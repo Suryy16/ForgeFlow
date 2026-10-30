@@ -43,6 +43,7 @@ func main() {
 	}
 
 	roleStore := authorization.NewPostgresProjectRoleStore(db)
+	taskAccessStore := authorization.NewPostgresTaskAccessStore(db)
 
 	authRepository := auth.NewRepository(db)
 	authHandler := auth.NewHandler(authRepository, jwtSecret, tokenTTL)
@@ -67,22 +68,59 @@ func main() {
 		return authHandler.RequireAuth(roleCheck)
 	}
 
+	protectedTask := func(
+		handler http.Handler,
+		param string,
+		roles ...string,
+	) http.Handler {
+		roleCheck := authorization.RequireTaskRole(
+			taskAccessStore,
+			param,
+			roles...,
+		)(handler)
+
+		return authHandler.RequireAuth(roleCheck)
+	}
+
 	fmt.Println("Starting server on :8080...")
 	//Tasks
-	router.HandleFunc(
-		"GET /api/v1/tasks", taskHandler.GetTasks,
+	router.Handle(
+		"GET /api/v1/tasks",
+		authHandler.RequireAuth(
+			http.HandlerFunc(taskHandler.GetTasks),
+		),
 	)
-	router.HandleFunc(
-		"GET /api/v1/tasks/{id}", taskHandler.GetTask,
+	router.Handle(
+		"GET /api/v1/tasks/{id}",
+		protectedTask(
+			http.HandlerFunc(taskHandler.GetTask),
+			"id",
+			"OWNER", "ADMIN", "MEMBER",
+		),
 	)
-	router.HandleFunc(
-		"POST /api/v1/projects/{project_id}/tasks", taskHandler.CreateTask,
+	router.Handle(
+		"POST /api/v1/projects/{project_id}/tasks",
+		protected(
+			http.HandlerFunc(taskHandler.CreateTask),
+			"project_id",
+			"OWNER", "ADMIN", "MEMBER",
+		),
 	)
-	router.HandleFunc(
-		"PUT /api/v1/tasks/{id}", taskHandler.UpdateTask,
+	router.Handle(
+		"PUT /api/v1/tasks/{id}",
+		protectedTask(
+			http.HandlerFunc(taskHandler.UpdateTask),
+			"id",
+			"OWNER", "ADMIN", "MEMBER",
+		),
 	)
-	router.HandleFunc(
-		"DELETE /api/v1/tasks/{id}", taskHandler.DeleteTask,
+	router.Handle(
+		"DELETE /api/v1/tasks/{id}",
+		protectedTask(
+			http.HandlerFunc(taskHandler.DeleteTask),
+			"id",
+			"OWNER", "ADMIN",
+		),
 	)
 
 	//Projects
@@ -136,7 +174,7 @@ func main() {
 	)
 	router.Handle(
 		"GET /api/v1/auth/me",
-		authHandler.RequireAuth(http.HandlerFunc(authHandler.Me)),
+		authHandler.RequireAuth(http.HandlerFunc(authHandler.GetProfile)),
 	)
 
 	if err := http.ListenAndServe(":8080", router); err != nil {

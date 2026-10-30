@@ -16,6 +16,12 @@ var (
 	ErrEmailExists  = errors.New("email already exists")
 )
 
+type ProjectRepository interface {
+	Create(ctx context.Context, name, email, passwordHash string) (User, error)
+	GetByEmail(ctx context.Context, email string) (User, error)
+	GetByID(ctx context.Context, id uuid.UUID) (User, error)
+}
+
 type Repository struct {
 	db *pgxpool.Pool
 }

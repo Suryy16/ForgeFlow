@@ -21,6 +21,7 @@ type TaskRepository interface {
 	Create(ctx context.Context, task Task) (Task, error)
 	GetByID(ctx context.Context, id uuid.UUID) (Task, error)
 	GetAll(ctx context.Context) ([]Task, error)
+	GetAllByUser(ctx context.Context, userID uuid.UUID) ([]Task, error)
 	Update(ctx context.Context, task Task) (Task, error)
 	Delete(ctx context.Context, id uuid.UUID) error
 }
@@ -209,13 +210,12 @@ func (r *PostgresRepository) Update(
 	query := `
 		UPDATE tasks
 		SET
-			project_id = $2,
-			assignee_id = $3,
-			title = $4,
-			description = $5,
-			status = $6,
-			priority = $7,
-			due_date = $8,
+			assignee_id = $2,
+			title = $3,
+			description = $4,
+			status = $5,
+			priority = $6,
+			due_date = $7,
 			updated_at = NOW()
 		WHERE id = $1
 		RETURNING
@@ -237,7 +237,6 @@ func (r *PostgresRepository) Update(
 		ctx,
 		query,
 		task.ID,
-		task.ProjectID,
 		task.AssigneeID,
 		task.Title,
 		task.Description,
@@ -284,4 +283,63 @@ func (r *PostgresRepository) Delete(
 		return ErrTaskNotFound
 	}
 	return nil
+}
+
+func (r *PostgresRepository) GetAllByUser(
+	ctx context.Context,
+	userID uuid.UUID,
+) ([]Task, error) {
+	query := `
+		SELECT
+			t.id,
+			t.project_id,
+			t.assignee_id,
+			t.title,
+			t.description,
+			t.status,
+			t.priority,
+			t.due_date,
+			t.created_at,
+			t.updated_at
+		FROM tasks t
+		INNER JOIN project_members pm
+			ON pm.project_id = t.project_id
+		WHERE pm.user_id = $1
+		ORDER BY t.created_at DESC
+	`
+
+	rows, err := r.db.Query(ctx, query, userID)
+	if err != nil {
+		return nil, fmt.Errorf("query user tasks: %w", err)
+	}
+	defer rows.Close()
+
+	tasks := make([]Task, 0)
+
+	for rows.Next() {
+		var t Task
+
+		if err := rows.Scan(
+			&t.ID,
+			&t.ProjectID,
+			&t.AssigneeID,
+			&t.Title,
+			&t.Description,
+			&t.Status,
+			&t.Priority,
+			&t.DueDate,
+			&t.CreatedAt,
+			&t.UpdatedAt,
+		); err != nil {
+			return nil, fmt.Errorf("scan task: %w", err)
+		}
+
+		tasks = append(tasks, t)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate tasks: %w", err)
+	}
+
+	return tasks, nil
 }
